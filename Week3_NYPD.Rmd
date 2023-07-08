@@ -1,0 +1,134 @@
+---
+title: "NYPD Gun Violence Data"
+author: "JJEA"
+date: "2023-07-01"
+output: pdf_document
+---
+
+```{r setup, include=TRUE}
+#We need the following libraries
+
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+```
+
+## Evolution of Gun Violence in NYC
+
+## Using the public data from <https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD>, we will try to show the development of violent events that involve the use of guns in New York City from 2006 to 2022.
+
+
+
+```{r load_data, include = TRUE}
+#Import the data from the URL:
+
+url <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+nypd <- read_csv(url)
+```
+
+## After importing the data we need to clean it up:
+
+
+
+```{r tidy_data, echo=TRUE}
+#Transform the date of the event to a type "DATE":
+nypd_tidy <- mutate(nypd, OCCUR_DATE = as.Date(OCCUR_DATE, format= "%m/%d/%Y"))
+#Delete columns that we are not going to use:
+nypd_tidy <- nypd_tidy %>%
+  select(-c(INCIDENT_KEY,JURISDICTION_CODE,LOCATION_DESC,LOC_CLASSFCTN_DESC,X_COORD_CD,
+            Y_COORD_CD, Latitude, Longitude, Lon_Lat))
+#Change a couple of column names for better understanding an easier coding:
+nypd_tidy <- nypd_tidy %>% rename("LOCATION" = "LOC_OF_OCCUR_DESC",
+                                  "MURDER" = "STATISTICAL_MURDER_FLAG")
+#Create 3 new columns for the research:
+nypd_tidy <- nypd_tidy %>% mutate(SHOOTINGS = 1) %>% 
+  mutate(DEATHS = case_when(MURDER == TRUE ~ 1, MURDER == FALSE ~ 0))
+nypd_tidy <- nypd_tidy %>% mutate(YEAR = year(OCCUR_DATE))
+```
+
+## We plot the number of events and how many resulted on human casualties, we can see a downtrend from 2006 to 2019, apparently during the pandemic the was a surge of gun violence in New York City, one could argue that the isolation caused people to react more violently.
+
+## As we can see the rate of casualties does not follows the same trend as the number of events, there seems to be year where there are a lot more fatalities, like 2010, 2018 and 2021.
+
+```{r plotting, echo = TRUE}
+#Create a query by year of accident, showing events and number of deaths, also
+#create a new column with the rate of fatal events:
+nypd_byyear <- nypd_tidy %>% group_by(YEAR) %>% 
+  summarise(EVENTS = sum(SHOOTINGS),FATAL_EVENTS = sum(DEATHS)) %>% 
+  mutate(FATAL_RATE = FATAL_EVENTS/EVENTS*100)
+nypd_byyear %>% ggplot(aes( x = YEAR, y = EVENTS)) +
+  geom_line(aes(color = "EVENTS")) +
+  geom_point(aes(color = "EVENTS")) +
+  geom_line(aes(y = FATAL_EVENTS, color = "FATAL_EVENTS")) +
+  geom_point(aes(y = FATAL_EVENTS, color = "FATAL_EVENTS")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = "Gun Violence in NYC", y = NULL)
+
+#We plotted the new rate of fatal events by year:
+nypd_byyear %>% ggplot(aes( x = YEAR, y = FATAL_RATE)) +
+  geom_line(aes(color = "FATAL_RATE")) +
+  geom_point(aes(color = "FATAL_RATE")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = "Rate of Casualties with Gun Violence in NYC", y = NULL)
+
+```
+## NYC is divided in 5 boroughs, so its interesting to see which borough has the most events involving gun violence. They show a similar pattern but there are difference worth exploring further.
+
+```{r queries, echo = TRUE}
+#Query showing how many events/deaths by borough
+nypd_boro <- nypd_tidy %>% group_by(BORO) %>% 
+  summarise(EVENTS = sum(SHOOTINGS),FATAL_EVENTS = sum(DEATHS)) %>% 
+  mutate(FATAL_RATE = FATAL_EVENTS/EVENTS*100)
+nypd_boro
+
+#Query showing the trends of events by borough, use pivot_wider for a better looking table
+nypd_boro_year <- nypd_tidy %>% group_by(BORO,YEAR) %>% 
+  summarise(EVENTS = sum(SHOOTINGS)) %>% 
+  pivot_wider(names_from = BORO, values_from = EVENTS)
+#Need to change a columns name for the plot
+colnames(nypd_boro_year)[6] = "STATEN_ISLAND"
+nypd_boro_year
+
+#Plot the information by borough
+nypd_boro_year %>% ggplot() +
+  geom_line(aes(x = YEAR, y = BRONX), color = "blue") +
+  geom_line(aes(x = YEAR, y = BROOKLYN), color = "red") +
+  geom_line(aes(x = YEAR, y = MANHATTAN), color = "green") +
+  geom_line(aes(x = YEAR, y = QUEENS), color = "purple") +
+  geom_line(aes(x = YEAR, y = STATEN_ISLAND), color = "orange") +
+  scale_y_log10() +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = "Gun Violence Events in NYC by Borough", y = NULL)
+```
+## Since there's a linear relationship between number of events and casualties we can create a linear model to project number or deaths by gun violence.
+
+## On the summary of the model we get an R^2 of 92.18 so it a fairly good prediction.
+
+## On the graph you can see how the actual number of deaths compares to our model.
+
+```{r model, echo = TRUE}
+#Create linear model, get the summary
+model <- lm(FATAL_EVENTS ~ EVENTS, data = nypd_byyear)
+summary(model)
+
+#Plot the actual number of casualties vs the predicted
+nypd_model <- nypd_byyear %>% mutate(PREDICTED_FATAL_EVENTS = predict(model))
+nypd_model %>% ggplot() +
+  geom_line(aes(x = YEAR, y = FATAL_EVENTS), color = "blue") +
+  geom_line(aes(x = YEAR, y = PREDICTED_FATAL_EVENTS, color = "red"), show.legend = FALSE) +
+  scale_y_log10() +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = "Predicted Fatal Events in NYC", y = NULL)
+```
+
+
+
+## Bias on the database and analysis:
+
+## I think there is bias in the database because it includes race of the perp and the victims; one of the sad parts of looking at the database is that it shows that african americans are more likely to be involved in gun violence.
+
+## As for the analysis, I am biased because I don't like guns and I was hoping to show that gun violence has become more scarce, which was true up until the pandemic, but the also sad part is that gun violence is still common in NYC.
